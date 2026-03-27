@@ -1,0 +1,484 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>ecosystem-vs-vandalism Prototype</title>
+  <style>
+    html, body { margin:0; padding:0; background:#111; color:#ddd; font-family:system-ui, sans-serif; }
+    #ui { position:fixed; left:12px; top:10px; background:rgba(0,0,0,0.55); padding:10px 12px; border-radius:10px; line-height:1.3; }
+    canvas { display:block; width:100vw; height:100vh; }
+    .mono { font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+  </style>
+</head>
+<body>
+  <div id="ui">
+    <div><b>ecosystem-vs-vandalism</b> (prototype)</div>
+    <div class="mono" id="status"></div>
+    <div class="mono" style="opacity:0.85; margin-top:6px;">
+      LMB select • RMB move<br/>
+      1 spawn Human • 2 spawn Bot<br/>
+      F toggle fog • G toggle grid
+    </div>
+  </div>
+  <canvas id="c"></canvas>
+
+<script>
+(() => {
+  // ---------- Config ----------
+  const TILE = 16;
+  const W = 80;           // tiles
+  const H = 50;
+  const TICKS_PER_SEC = 20;
+  const DT = 1 / TICKS_PER_SEC;
+
+  // Tile types (keep simple)
+  // 0 floor, 1 wall
+  const tiles = new Uint8Array(W * H);
+  const corruption = new Uint8Array(W * H);      // 0..255
+  const exploredHuman = new Uint8Array(W * H);   // 0/1
+  const powered = new Uint8Array(W * H);         // 0/1 (placeholder, later per-sector)
+
+  // Debug toggles
+  let showFog = true;
+  let showGrid = false;
+
+  // ---------- Canvas ----------
+  const canvas = document.getElementById("c");
+  const ctx = canvas.getContext("2d", { alpha: false });
+  let cw = 0, ch = 0;
+
+  function resize() {
+    cw = canvas.width = Math.floor(window.innerWidth * devicePixelRatio);
+    ch = canvas.height = Math.floor(window.innerHeight * devicePixelRatio);
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.scale(devicePixelRatio, devicePixelRatio);
+  }
+  window.addEventListener("resize", resize);
+  resize();
+
+  // Camera (simple center on selected)
+  const cam = { x: 0, y: 0 };
+
+  // ---------- Helpers ----------
+  const idx = (x,y) => x + y * W;
+  function inBounds(x,y) { return x >= 0 && y >= 0 && x < W && y < H; }
+
+  // Build a simple map: border walls + a few rooms/corridors
+  function genMap() {
+    tiles.fill(0);
+    corruption.fill(0);
+    exploredHuman.fill(0);
+    powered.fill(1);
+
+    // border walls
+    for (let x = 0; x < W; x++) { tiles[idx(x,0)] = 1; tiles[idx(x,H-1)] = 1; }
+    for (let y = 0; y < H; y++) { tiles[idx(0,y)] = 1; tiles[idx(W-1,y)] = 1; }
+
+    // random blocky walls
+    for (let i = 0; i < 220; i++) {
+      const x = 2 + (Math.random() * (W-4) | 0);
+      const y = 2 + (Math.random() * (H-4) | 0);
+      const w = 1 + (Math.random() * 6 | 0);
+      const h = 1 + (Math.random() * 6 | 0);
+      for (let yy = y; yy < y+h; yy++) for (let xx = x; xx < x+w; xx++) tiles[idx(xx,yy)] = 1;
+    }
+    // carve a few corridors
+    for (let i = 0; i < 6; i++) {
+      const y = 4 + (Math.random() * (H-8) | 0);
+      for (let x = 2; x < W-2; x++) if (Math.random() < 0.85) tiles[idx(x,y)] = 0;
+    }
+
+    // seed corruption in one corner pocket
+    seedCorruption(6, 6, 140);
+  }
+
+  function seedCorruption(x,y,amount=120) {
+    if (!inBounds(x,y) || tiles[idx(x,y)] === 1) return;
+    corruption[idx(x,y)] = Math.max(corruption[idx(x,y)], amount);
+  }
+
+  // ---------- Entities ----------
+  // Types: "human", "bot"
+  const ents = [];
+  let nextId = 1;
+
+  function spawn(type, x, y) {
+    // find nearby floor if requested spot blocked
+    for (let r = 0; r < 14; r++) {
+      const xx = x + ((Math.random()* (r+1))|0) - (r>>1);
+      const yy = y + ((Math.random()* (r+1))|0) - (r>>1);
+      if (inBounds(xx,yy) && tiles[idx(xx,yy)] === 0) {
+        const e = {
+          id: nextId++,
+          type,
+          x: xx + 0.5,
+          y: yy + 0.5,
+          vx: 0, vy: 0,
+          speed: type === "bot" ? 3.2 : 2.6,
+          hp: type === "bot" ? 14 : 10,
+          target: null,
+          ai: type === "bot" ? "maintain" : "wander",
+          selected: false,
+          facing: 0
+        };
+        ents.push(e);
+        return e;
+      }
+    }
+    return null;
+  }
+
+  // ---------- Simple AI / Movement ----------
+  function isWalkable(tx, ty) {
+    if (!inBounds(tx,ty)) return false;
+    return tiles[idx(tx,ty)] === 0;
+  }
+
+  function steerTo(e, tx, ty) {
+    const dx = tx - e.x;
+    const dy = ty - e.y;
+    const d = Math.hypot(dx,dy) || 1;
+    e.vx = (dx / d) * e.speed;
+    e.vy = (dy / d) * e.speed;
+    e.facing = Math.atan2(e.vy, e.vx);
+  }
+
+  function tryMove(e, dt) {
+    // very cheap collision: axis-separated, tile blocking
+    const nx = e.x + e.vx * dt;
+    const ny = e.y + e.vy * dt;
+
+    // x axis
+    {
+      const tx = nx | 0;
+      const ty = e.y | 0;
+      if (isWalkable(tx, ty)) e.x = nx;
+      else e.vx = 0;
+    }
+    // y axis
+    {
+      const tx = e.x | 0;
+      const ty = ny | 0;
+      if (isWalkable(tx, ty)) e.y = ny;
+      else e.vy = 0;
+    }
+  }
+
+  function pickWanderTarget(e) {
+    for (let i = 0; i < 40; i++) {
+      const tx = (e.x + (Math.random()*14 - 7)) | 0;
+      const ty = (e.y + (Math.random()*14 - 7)) | 0;
+      if (isWalkable(tx,ty)) return { x: tx + 0.5, y: ty + 0.5 };
+    }
+    return null;
+  }
+
+  function botMaintainTarget(e) {
+    // bots prefer the edge of corruption, like maintenance spreading infrastructure
+    // Find nearby tile with low corruption adjacent to higher corruption.
+    const ex = e.x | 0, ey = e.y | 0;
+    let best = null;
+    for (let r = 2; r <= 10; r++) {
+      for (let i = 0; i < 60; i++) {
+        const tx = ex + ((Math.random()* (r+1))|0) - (r>>1);
+        const ty = ey + ((Math.random()* (r+1))|0) - (r>>1);
+        if (!isWalkable(tx,ty)) continue;
+        const c = corruption[idx(tx,ty)];
+        if (c > 40) continue; // already pretty corrupted
+        // check neighbors for corruption presence
+        let near = 0;
+        for (const [dx,dy] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+          const nx = tx+dx, ny = ty+dy;
+          if (inBounds(nx,ny)) near = Math.max(near, corruption[idx(nx,ny)]);
+        }
+        if (near > 90) { best = { x: tx+0.5, y: ty+0.5 }; break; }
+      }
+      if (best) break;
+    }
+    return best;
+  }
+
+  // ---------- Corruption Spread (cheap) ----------
+  function updateCorruption() {
+    // Spread slowly from high tiles to adjacent low tiles.
+    // Do a small random sample per tick for performance.
+    const samples = 220;
+    for (let i = 0; i < samples; i++) {
+      const x = 1 + (Math.random() * (W-2) | 0);
+      const y = 1 + (Math.random() * (H-2) | 0);
+      const k = idx(x,y);
+      if (tiles[k] === 1) continue;
+      const c = corruption[k];
+      if (c < 70) continue;
+
+      // pick one neighbor
+      const dirs = [[1,0],[-1,0],[0,1],[0,-1]];
+      const [dx,dy] = dirs[(Math.random()*4)|0];
+      const nx = x + dx, ny = y + dy;
+      const nk = idx(nx,ny);
+      if (tiles[nk] === 1) continue;
+
+      const n = corruption[nk];
+      // transfer a tiny amount
+      if (n + 3 < c) corruption[nk] = Math.min(255, n + 2);
+      // decay a hair so it doesn't saturate instantly
+      corruption[k] = Math.max(0, c - 1);
+    }
+  }
+
+  // ---------- Fog of War ----------
+  function revealFromHuman(e) {
+    // cheap reveal: circle + flashlight cone
+    const r = 7;
+    const ex = e.x, ey = e.y;
+    const fx = Math.cos(e.facing), fy = Math.sin(e.facing);
+
+    for (let yy = -r; yy <= r; yy++) for (let xx = -r; xx <= r; xx++) {
+      const tx = (ex + xx) | 0;
+      const ty = (ey + yy) | 0;
+      if (!inBounds(tx,ty)) continue;
+      const dd = xx*xx + yy*yy;
+      if (dd > r*r) continue;
+
+      // flashlight cone: bias reveal forward
+      const vx = (tx+0.5) - ex;
+      const vy = (ty+0.5) - ey;
+      const d = Math.hypot(vx,vy) || 1;
+      const dot = (vx/d)*fx + (vy/d)*fy;
+      if (dot > -0.15) exploredHuman[idx(tx,ty)] = 1;
+    }
+  }
+
+  // ---------- Input ----------
+  let selected = null;
+
+  canvas.addEventListener("contextmenu", e => e.preventDefault());
+  canvas.addEventListener("mousedown", (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const mx = (e.clientX - rect.left);
+    const my = (e.clientY - rect.top);
+    const wx = mx / TILE + cam.x;
+    const wy = my / TILE + cam.y;
+
+    if (e.button === 0) {
+      // select nearest
+      let best = null, bd = 999;
+      for (const ent of ents) {
+        const d = Math.hypot(ent.x - wx, ent.y - wy);
+        if (d < 1.0 && d < bd) { bd = d; best = ent; }
+      }
+      if (selected) selected.selected = false;
+      selected = best;
+      if (selected) selected.selected = true;
+    } else if (e.button === 2) {
+      if (selected) selected.target = { x: (wx|0) + 0.5, y: (wy|0) + 0.5 };
+    }
+  });
+
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "1") spawn("human", 10, 12);
+    if (e.key === "2") spawn("bot", 8, 8);
+    if (e.key.toLowerCase() === "f") showFog = !showFog;
+    if (e.key.toLowerCase() === "g") showGrid = !showGrid;
+  });
+
+  // ---------- Update loop ----------
+  let acc = 0;
+  let last = performance.now();
+
+  function tick() {
+    // AI
+    for (const e of ents) {
+      if (e.type === "human") {
+        // Humans reveal fog as they move
+        revealFromHuman(e);
+
+        if (e.selected && e.target) {
+          steerTo(e, e.target.x, e.target.y);
+          if (Math.hypot(e.target.x - e.x, e.target.y - e.y) < 0.2) e.target = null;
+        } else {
+          // wander lightly
+          if (!e.target || Math.random() < 0.02) e.target = pickWanderTarget(e);
+          if (e.target) steerTo(e, e.target.x, e.target.y);
+        }
+      } else if (e.type === "bot") {
+        // Bots prefer to expand corruption edges
+        if (!e.target || Math.random() < 0.05) e.target = botMaintainTarget(e) || pickWanderTarget(e);
+        if (e.target) steerTo(e, e.target.x, e.target.y);
+
+        // Wherever bots travel, they "lay cable" and increase corruption
+        const tx = e.x | 0, ty = e.y | 0;
+        const k = idx(tx,ty);
+        if (tiles[k] === 0) corruption[k] = Math.min(255, corruption[k] + 4);
+      }
+
+      tryMove(e, DT);
+    }
+
+    updateCorruption();
+
+    // Camera follow selected
+    if (selected) {
+      cam.x = selected.x - (cw / devicePixelRatio) / TILE * 0.5;
+      cam.y = selected.y - (ch / devicePixelRatio) / TILE * 0.5;
+    }
+    cam.x = Math.max(0, Math.min(W - (cw / devicePixelRatio)/TILE, cam.x));
+    cam.y = Math.max(0, Math.min(H - (ch / devicePixelRatio)/TILE, cam.y));
+  }
+
+  function render() {
+    // background
+    ctx.fillStyle = "#0b0b0b";
+    ctx.fillRect(0,0, cw/devicePixelRatio, ch/devicePixelRatio);
+
+    const viewW = Math.ceil((cw/devicePixelRatio) / TILE);
+    const viewH = Math.ceil((ch/devicePixelRatio) / TILE);
+    const ox = cam.x | 0;
+    const oy = cam.y | 0;
+
+    // tiles
+    for (let y = 0; y <= viewH; y++) for (let x = 0; x <= viewW; x++) {
+      const tx = ox + x;
+      const ty = oy + y;
+      if (!inBounds(tx,ty)) continue;
+
+      const k = idx(tx,ty);
+      const px = (tx - cam.x) * TILE;
+      const py = (ty - cam.y) * TILE;
+
+      // base tile
+      if (tiles[k] === 1) {
+        ctx.fillStyle = "#1a1a1a";
+      } else {
+        ctx.fillStyle = "#111";
+      }
+      ctx.fillRect(px, py, TILE, TILE);
+
+      // corruption overlay (cheap)
+      const c = corruption[k];
+      if (c > 0 && tiles[k] === 0) {
+        const a = Math.min(0.7, c / 255);
+        ctx.fillStyle = `rgba(80, 180, 255, ${a})`;
+        ctx.fillRect(px, py, TILE, TILE);
+      }
+
+      // fog
+      if (showFog && exploredHuman[k] === 0) {
+        ctx.fillStyle = "rgba(0,0,0,0.88)";
+        ctx.fillRect(px, py, TILE, TILE);
+      }
+
+      // grid
+      if (showGrid) {
+        ctx.strokeStyle = "rgba(255,255,255,0.06)";
+        ctx.strokeRect(px, py, TILE, TILE);
+      }
+    }
+
+    // entities
+    for (const e of ents) {
+      if (showFog && e.type === "bot") {
+        // bots are hidden unless tile explored (cheap stealth)
+        const k = idx(e.x|0, e.y|0);
+        if (exploredHuman[k] === 0) continue;
+      }
+
+      const px = (e.x - cam.x) * TILE;
+      const py = (e.y - cam.y) * TILE;
+
+      if (e.type === "human") {
+        // human placeholder: circle + flashlight cone
+        ctx.fillStyle = "#e6e6e6";
+        ctx.beginPath();
+        ctx.arc(px, py, 4.2, 0, Math.PI*2);
+        ctx.fill();
+
+        // flashlight cone
+        ctx.fillStyle = "rgba(255,255,200,0.12)";
+        ctx.beginPath();
+        ctx.moveTo(px, py);
+        const ang = e.facing;
+        const a1 = ang - 0.55, a2 = ang + 0.55;
+        const len = 82;
+        ctx.lineTo(px + Math.cos(a1)*len, py + Math.sin(a1)*len);
+        ctx.lineTo(px + Math.cos(a2)*len, py + Math.sin(a2)*len);
+        ctx.closePath();
+        ctx.fill();
+
+      } else {
+        // bot placeholder: chunky rounded rectangle + antenna
+        ctx.fillStyle = "#8fffd0";
+        roundRect(ctx, px-6, py-5, 12, 10, 3);
+        ctx.fill();
+
+        // antenna
+        ctx.strokeStyle = "#8fffd0";
+        ctx.beginPath();
+        ctx.moveTo(px, py-5);
+        ctx.lineTo(px + Math.cos(e.facing)*8, py + Math.sin(e.facing)*8);
+        ctx.stroke();
+      }
+
+      // selection ring
+      if (e.selected) {
+        ctx.strokeStyle = "rgba(255,255,255,0.85)";
+        ctx.beginPath();
+        ctx.arc(px, py, 8.2, 0, Math.PI*2);
+        ctx.stroke();
+      }
+    }
+
+    // UI status
+    const status = document.getElementById("status");
+    const corAvg = avgCorruption();
+    status.textContent =
+      `ents:${ents.length}  corruption(avg):${corAvg}  fog:${showFog ? "on":"off"}  grid:${showGrid ? "on":"off"}` +
+      (selected ? `  selected:${selected.type}#${selected.id}` : "");
+  }
+
+  function avgCorruption() {
+    // quick sample
+    let s = 0, n = 0;
+    for (let i = 0; i < 800; i++) {
+      const x = 1 + (Math.random()*(W-2)|0);
+      const y = 1 + (Math.random()*(H-2)|0);
+      const k = idx(x,y);
+      if (tiles[k] === 0) { s += corruption[k]; n++; }
+    }
+    return n ? Math.round(s / n) : 0;
+  }
+
+  function roundRect(ctx, x, y, w, h, r) {
+    const rr = Math.min(r, w/2, h/2);
+    ctx.beginPath();
+    ctx.moveTo(x+rr, y);
+    ctx.arcTo(x+w, y, x+w, y+h, rr);
+    ctx.arcTo(x+w, y+h, x, y+h, rr);
+    ctx.arcTo(x, y+h, x, y, rr);
+    ctx.arcTo(x, y, x+w, y, rr);
+    ctx.closePath();
+  }
+
+  function frame(now) {
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    acc += dt;
+    while (acc >= DT) {
+      tick();
+      acc -= DT;
+    }
+    render();
+    requestAnimationFrame(frame);
+  }
+
+  // init
+  genMap();
+  spawn("human", 12, 14);
+  spawn("human", 13, 14);
+  spawn("bot", 7, 7);
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

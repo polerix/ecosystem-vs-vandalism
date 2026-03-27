@@ -1,0 +1,50 @@
+:root{
+  --bg:#0b0b0b;
+  --panel:rgba(20,20,20,0.8);
+  --accent:#ffb86b; /* UI accent (kept) */
+  /* The Foundry palette: brassy conduit, oily metal, signal teal */
+  --swarm-brass: #cda34a;
+  --swarm-olive: #7aa05a;
+  --alien:#cda34a; /* reused for swarm tiles */
+  --human:#ff6b6b;
+  --tunnel:#bfbfbf;
+  --broken:#7a7a7a;
+  --corrupt:#7be6d9; /* signal/scrap glow */
+  font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;
+}
+
+html,body{height:100%;margin:0;background:linear-gradient(180deg,var(--bg),#070707);color:#eee;touch-action:none}
+#sim{display:block;width:100vw;height:100vh;object-fit:cover}
+
+/* UI overlay - compact and touch friendly */
+#ui{
+  position:absolute;inset:8px 8px auto auto;max-width:42ch;background:var(--panel);backdrop-filter:blur(6px);
+  border-radius:10px;padding:10px;gap:8px;display:flex;flex-direction:column;font-size:13px;
+}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.stat{padding:6px 8px;background:rgba(255,255,255,0.03);border-radius:6px;min-width:88px;text-align:center}
+
+.controls{display:flex;flex-direction:column;gap:6px;margin-top:6px}
+.controls button{padding:8px;border-radius:8px;border:0;background:var(--accent);color:#080808;font-weight:600}
+.controls label{display:flex;gap:8px;align-items:center;font-size:12px}
+.controls input[type=range]{flex:1;touch-action:none}
+
+.legend{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:6px;font-size:12px}
+.key{width:14px;height:14px;border-radius:3px;display:inline-block;margin-right:6px}
+.key.alien{background:var(--alien)}
+.key.human{background:var(--human)}
+.key.tunnel{background:var(--tunnel)}
+.key.broken{background:var(--broken)}
+.key.corrupt{background:linear-gradient(45deg,var(--corrupt),#ff9be6)}
+
+/* Quick terms glossary */
+#terms{margin-top:8px;background:rgba(255,255,255,0.02);padding:8px;border-radius:8px;font-size:12px;line-height:1.2}
+#terms strong{display:block;margin-bottom:6px;color:var(--accent);font-weight:600}
+.term{margin-bottom:4px}
+.term-name{font-weight:700;color:var(--accent);margin-right:6px}
+@media (max-width:480px){
+  #ui{right:8px;left:8px;bottom:8px;top:auto;max-width:none}
+  #sim{height:100vh}
+  #terms{font-size:12px}
+}
+

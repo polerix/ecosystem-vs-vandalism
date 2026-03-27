@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <canvas id="sim"></canvas>
+
+  <div id="ui">
+    <div class="row">
+      <div class="stat">Time: <span id="time">0</span>s</div>
+      <div class="stat">Power: <span id="power">100</span>%</div>
+      <div class="stat">Integrity: <span id="integrity">100</span>%</div>
+      <div class="stat">Corruption: <span id="corrupt">0</span>%</div>
+      <div class="stat">Contamination: <span id="contam">0</span>%</div>
+      <div class="stat">Control: <span id="control">50</span>%</div>
+      <div class="stat">Sprawl: <span id="sprawl">0</span>%</div>
+      <div class="stat">Alert: <span id="alert">0</span>%</div>
+      <div class="stat">Host Supply: <span id="hostsupply">0</span></div>
+    </div>
+
+    <div class="controls">
+      <button id="pause">Pause</button>
+      <button id="step">Step</button>
+      <label>Speed <input id="speed" type="range" min="0.25" max="4" step="0.25" value="1"></label>
+      <label>Human Aggressiveness <input id="aggr" type="range" min="0" max="1" step="0.01" value="0.25"></label>
+      <label>Corruption Strength <input id="corstr" type="range" min="0" max="1" step="0.01" value="0.3"></label>
+    </div>
+
+    <div class="controls" style="margin-top:8px;">
+      <label>Max Humans <input id="maxHumans" type="range" min="1" max="200" step="1" value="30"><span id="maxHumansVal">30</span></label>
+      <label>Max HVAC Bots <input id="maxBots" type="range" min="1" max="200" step="1" value="12"><span id="maxBotsVal">12</span></label>
+      <label>Human spawn rate (per min) <input id="humanRate" type="range" min="0" max="120" step="1" value="12"><span id="humanRateVal">12</span></label>
+      <label>Bot spawn rate (per min) <input id="botRate" type="range" min="0" max="60" step="1" value="4"><span id="botRateVal">4</span></label>
+      <label>Corruption spread intensity <input id="corSpread" type="range" min="0" max="2" step="0.01" value="1"><span id="corSpreadVal">1.00</span></label>
+      <label>Resource spawn rate (per min) <input id="resRate" type="range" min="0" max="60" step="1" value="6"><span id="resRateVal">6</span></label>
+      <label>Max resources <input id="maxResources" type="range" min="0" max="200" step="1" value="20"><span id="maxResourcesVal">20</span></label>
+    </div>
+
+    <div class="legend">
+      <div class="key alien"></div> The Foundry
+      <div class="key human"></div> Humans (contaminants)
+      <div class="key tunnel"></div> Passageway
+      <div class="key broken"></div> Blocked / welded
+      <div class="key corrupt"></div> Tech Corruption
+    </div>
+
+    <div id="terms" aria-hidden="false">
+      <strong>Quick UI terms</strong>
+      <div class="term"><span class="term-name">Corruption:</span> Tech‑creep — cable mats, resin conduits and mechanical anchors that boost Swarm systems.</div>
+      <div class="term"><span class="term-name">Alert:</span> Human awareness level — higher values mean stronger security response.</div>
+      <div class="term"><span class="term-name">Host Supply:</span> Local supply of human targets for processing and fabrication.</div>
+    </div>
+  </div>
+
+  <script type="module" src="main.js"></script>
+</body>
+</html>
+

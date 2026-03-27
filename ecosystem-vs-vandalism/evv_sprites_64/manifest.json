@@ -1,0 +1,112 @@
+{
+  "tile_size": 64,
+  "format": "png",
+  "transparent": true,
+  "sprites": [
+    {
+      "name": "human_marine_01",
+      "file": "human_marine_01.png",
+      "w": 64,
+      "h": 64
+    },
+    {
+      "name": "human_marine_02",
+      "file": "human_marine_02.png",
+      "w": 64,
+      "h": 64
+    },
+    {
+      "name": "human_engineer_01",
+      "file": "human_engineer_01.png",
+      "w": 64,
+      "h": 64
+    },
+    {
+      "name": "human_medic_01",
+      "file": "human_medic_01.png",
+      "w": 64,
+      "h": 64
+    },
+    {
+      "name": "human_colonist_01",
+      "file": "human_colonist_01.png",
+      "w": 64,
+      "h": 64
+    },
+    {
+      "name": "human_colonist_02",
+      "file": "human_colonist_02.png",
+      "w": 64,
+      "h": 64
+    },
+    {
+      "name": "human_colonist_03",
+      "file": "human_colonist_03.png",
+      "w": 64,
+      "h": 64
+    },
+    {
+      "name": "human_colonist_04",
+      "file": "human_colonist_04.png",
+      "w": 64,
+      "h": 64
+    },
+    {
+      "name": "synthetic_stack_01",
+      "file": "synthetic_stack_01.png",
+      "w": 64,
+      "h": 64
+    },
+    {
+      "name": "synthetic_stack_02",
+      "file": "synthetic_stack_02.png",
+      "w": 64,
+      "h": 64
+    },
+    {
+      "name": "bot_saw_01",
+      "file": "bot_saw_01.png",
+      "w": 64,
+      "h": 64
+    },
+    {
+      "name": "bot_drill_01",
+      "file": "bot_drill_01.png",
+      "w": 64,
+      "h": 64
+    },
+    {
+      "name": "bot_sander_01",
+      "file": "bot_sander_01.png",
+      "w": 64,
+      "h": 64
+    },
+    {
+      "name": "bot_snare_01",
+      "file": "bot_snare_01.png",
+      "w": 64,
+      "h": 64
+    },
+    {
+      "name": "node_relay_01",
+      "file": "node_relay_01.png",
+      "w": 64,
+      "h": 64
+    },
+    {
+      "name": "pod_capture_01",
+      "file": "pod_capture_01.png",
+      "w": 64,
+      "h": 64
+    }
+  ],
+  "sheet": {
+    "file": "sprite_sheet_4x4.png",
+    "cols": 4,
+    "rows": 4,
+    "cell": [
+      64,
+      64
+    ]
+  }
+}

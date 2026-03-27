@@ -1,0 +1,676 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>ecosystem-vs-vandalism Prototype</title>
+  <style>
+    html, body { margin:0; padding:0; background:#111; color:#ddd; font-family:system-ui, sans-serif; }
+    #ui { position:fixed; left:12px; top:10px; background:rgba(0,0,0,0.55); padding:10px 12px; border-radius:10px; line-height:1.3; min-width: 320px; }
+    canvas { display:block; width:100vw; height:100vh; }
+
+    .mono { font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+
+    #menuBtn, #resetBtn, #clearResourcesBtn {
+      background:#1a1a1a; color:#ddd; border:1px solid rgba(255,255,255,0.18);
+      padding:6px 10px; border-radius:8px; cursor:pointer;
+    }
+    #menuBtn:hover, #resetBtn:hover, #clearResourcesBtn:hover { border-color: rgba(255,255,255,0.35); }
+
+    #ui .row { display:grid; grid-template-columns: 140px 1fr 40px; gap:8px; align-items:center; margin:6px 0; }
+    #ui label { font-size:12px; opacity:0.9; }
+    #ui input[type="range"] { width:100%; }
+    #ui .val { text-align:right; font-size:12px; opacity:0.9; }
+  </style>
+</head>
+<body>
+  <div id="ui">
+    <div style="display:flex; gap:8px; align-items:center;">
+      <button id="menuBtn">Menu</button>
+      <div><b>ecosystem-vs-vandalism</b> <span style="opacity:0.75">(prototype)</span></div>
+    </div>
+
+    <div id="menuPanel" style="display:none; margin-top:10px;">
+      <div style="font-weight:600; margin-bottom:6px;">Simulation Controls</div>
+
+      <div class="row">
+        <label>Max Humans</label>
+        <input id="maxHumans" type="range" min="0" max="60" value="10">
+        <span class="val" id="maxHumansVal">10</span>
+      </div>
+
+      <div class="row">
+        <label>Max HVAC Bots</label>
+        <input id="maxBots" type="range" min="0" max="60" value="10">
+        <span class="val" id="maxBotsVal">10</span>
+      </div>
+
+      <div class="row">
+        <label>Human spawn / min</label>
+        <input id="humanSpawnPerMin" type="range" min="0" max="60" value="6">
+        <span class="val" id="humanSpawnPerMinVal">6</span>
+      </div>
+
+      <div class="row">
+        <label>Bot spawn / min</label>
+        <input id="botSpawnPerMin" type="range" min="0" max="60" value="4">
+        <span class="val" id="botSpawnPerMinVal">4</span>
+      </div>
+
+      <div class="row">
+        <label>Corruption intensity</label>
+        <input id="corruptionIntensity" type="range" min="0" max="200" value="100">
+        <span class="val" id="corruptionIntensityVal">100</span>
+      </div>
+
+      <hr style="border:0; border-top:1px solid rgba(255,255,255,0.12); margin:10px 0;">
+
+      <div style="font-weight:600; margin-bottom:6px;">Resources (placeholder)</div>
+
+      <div class="row">
+        <label>Resource spawn / min</label>
+        <input id="resourceSpawnPerMin" type="range" min="0" max="120" value="12">
+        <span class="val" id="resourceSpawnPerMinVal">12</span>
+      </div>
+
+      <div class="row">
+        <label>Max resources</label>
+        <input id="maxResources" type="range" min="0" max="300" value="80">
+        <span class="val" id="maxResourcesVal">80</span>
+      </div>
+
+      <div style="display:flex; gap:8px; margin-top:10px;">
+        <button id="resetBtn">Reset Map</button>
+        <button id="clearResourcesBtn">Clear Resources</button>
+      </div>
+
+      <div style="margin-top:8px; font-size:12px; opacity:0.8;">
+        Tip: raise bots + corruption to watch the station “heal” itself into a cable-mat nightmare.
+      </div>
+    </div>
+
+    <div class="mono" id="status" style="margin-top:10px;"></div>
+
+    <div class="mono" style="opacity:0.85; margin-top:6px;">
+      LMB select • RMB move<br/>
+      1 spawn Human • 2 spawn Bot<br/>
+      F toggle fog • G toggle grid
+    </div>
+  </div>
+
+  <canvas id="c"></canvas>
+
+<script>
+(() => {
+  // ---------- Config ----------
+  const TILE = 16;
+  const W = 80;           // tiles
+  const H = 50;
+  const TICKS_PER_SEC = 20;
+  const DT = 1 / TICKS_PER_SEC;
+
+  const sim = {
+    maxHumans: 10,
+    maxBots: 10,
+    humanSpawnPerMin: 6,
+    botSpawnPerMin: 4,
+    corruptionIntensity: 100,
+    resourceSpawnPerMin: 12,
+    maxResources: 80,
+  };
+
+  let humanSpawnAcc = 0;
+  let botSpawnAcc = 0;
+  let resourceSpawnAcc = 0;
+
+  const resources = []; // {x,y,type}
+
+  // Tile types: 0 floor, 1 wall
+  const tiles = new Uint8Array(W * H);
+  const corruption = new Uint8Array(W * H);      // 0..255
+  const exploredHuman = new Uint8Array(W * H);   // 0/1
+  const powered = new Uint8Array(W * H);         // 0/1 (placeholder)
+
+  // Debug toggles
+  let showFog = true;
+  let showGrid = false;
+
+  // ---------- Canvas ----------
+  const canvas = document.getElementById("c");
+  const ctx = canvas.getContext("2d", { alpha: false });
+  let cw = 0, ch = 0;
+
+  function resize() {
+    cw = canvas.width = Math.floor(window.innerWidth * devicePixelRatio);
+    ch = canvas.height = Math.floor(window.innerHeight * devicePixelRatio);
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.scale(devicePixelRatio, devicePixelRatio);
+  }
+  window.addEventListener("resize", resize);
+  resize();
+
+  // Camera
+  const cam = { x: 0, y: 0 };
+
+  // ---------- Helpers ----------
+  const idx = (x,y) => x + y * W;
+  function inBounds(x,y) { return x >= 0 && y >= 0 && x < W && y < H; }
+
+  // ---------- Sprites ----------
+  // Sprites are in /image/ folder, individual PNGs, 64x64 transparent
+  const SPRITES = {
+    humans: [
+      "image/human_marine_01.png",
+      "image/human_engineer_01.png",
+      "image/human_medic_01.png",
+      "image/human_colonist_01.png",
+      "image/human_colonist_02.png",
+      "image/human_colonist_03.png",
+      "image/human_colonist_04.png",
+    ],
+    bots: [
+      "image/bot_saw_01.png",
+      "image/bot_drill_01.png",
+      "image/bot_sander_01.png",
+      "image/bot_snare_01.png",
+    ],
+    nodes: {
+      relay: "image/node_relay_01.png",
+      pod: "image/pod_capture_01.png",
+      synthetic1: "image/synthetic_stack_01.png",
+      synthetic2: "image/synthetic_stack_02.png",
+    }
+  };
+
+  const spriteCache = new Map(); // url -> {img, ok}
+  function loadImage(url) {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => resolve({ url, img, ok: true });
+      img.onerror = () => resolve({ url, img: null, ok: false });
+      img.src = url;
+    });
+  }
+
+  async function loadSprites() {
+    const urls = [
+      ...SPRITES.humans,
+      ...SPRITES.bots,
+      ...Object.values(SPRITES.nodes),
+    ];
+    const results = await Promise.all(urls.map(loadImage));
+    for (const r of results) spriteCache.set(r.url, r);
+    const ok = results.filter(r => r.ok).length;
+    const total = results.length;
+    console.log(`Sprites loaded: ${ok}/${total}`);
+  }
+
+  function getRandomSpriteUrl(kind) {
+    const list = kind === "human" ? SPRITES.humans : SPRITES.bots;
+    return list[(Math.random() * list.length) | 0];
+  }
+
+  function drawSprite(url, worldX, worldY, sizePx=20) {
+    const rec = spriteCache.get(url);
+    if (rec && rec.ok && rec.img) {
+      // Draw 64x64 sprite scaled down into tile world.
+      const px = (worldX - cam.x) * TILE;
+      const py = (worldY - cam.y) * TILE;
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(rec.img, px - sizePx/2, py - sizePx/2, sizePx, sizePx);
+      return true;
+    }
+    return false;
+  }
+
+  // ---------- Map ----------
+  function genMap() {
+    tiles.fill(0);
+    corruption.fill(0);
+    exploredHuman.fill(0);
+    powered.fill(1);
+
+    for (let x = 0; x < W; x++) { tiles[idx(x,0)] = 1; tiles[idx(x,H-1)] = 1; }
+    for (let y = 0; y < H; y++) { tiles[idx(0,y)] = 1; tiles[idx(W-1,y)] = 1; }
+
+    for (let i = 0; i < 220; i++) {
+      const x = 2 + (Math.random() * (W-4) | 0);
+      const y = 2 + (Math.random() * (H-4) | 0);
+      const w = 1 + (Math.random() * 6 | 0);
+      const h = 1 + (Math.random() * 6 | 0);
+      for (let yy = y; yy < y+h; yy++) for (let xx = x; xx < x+w; xx++) tiles[idx(xx,yy)] = 1;
+    }
+    for (let i = 0; i < 6; i++) {
+      const y = 4 + (Math.random() * (H-8) | 0);
+      for (let x = 2; x < W-2; x++) if (Math.random() < 0.85) tiles[idx(x,y)] = 0;
+    }
+
+    seedCorruption(6, 6, 140);
+  }
+
+  function seedCorruption(x,y,amount=120) {
+    if (!inBounds(x,y) || tiles[idx(x,y)] === 1) return;
+    corruption[idx(x,y)] = Math.max(corruption[idx(x,y)], amount);
+  }
+
+  // ---------- Entities ----------
+  const ents = [];
+  let nextId = 1;
+
+  function spawn(type, x, y) {
+    for (let r = 0; r < 14; r++) {
+      const xx = x + ((Math.random()* (r+1))|0) - (r>>1);
+      const yy = y + ((Math.random()* (r+1))|0) - (r>>1);
+      if (inBounds(xx,yy) && tiles[idx(xx,yy)] === 0) {
+        const e = {
+          id: nextId++,
+          type,
+          x: xx + 0.5,
+          y: yy + 0.5,
+          vx: 0, vy: 0,
+          speed: type === "bot" ? 3.2 : 2.6,
+          hp: type === "bot" ? 14 : 10,
+          target: null,
+          selected: false,
+          facing: 0,
+          spriteUrl: getRandomSpriteUrl(type),
+        };
+        ents.push(e);
+        return e;
+      }
+    }
+    return null;
+  }
+
+  // ---------- Movement ----------
+  function isWalkable(tx, ty) {
+    if (!inBounds(tx,ty)) return false;
+    return tiles[idx(tx,ty)] === 0;
+  }
+
+  function steerTo(e, tx, ty) {
+    const dx = tx - e.x;
+    const dy = ty - e.y;
+    const d = Math.hypot(dx,dy) || 1;
+    e.vx = (dx / d) * e.speed;
+    e.vy = (dy / d) * e.speed;
+    e.facing = Math.atan2(e.vy, e.vx);
+  }
+
+  function tryMove(e, dt) {
+    const nx = e.x + e.vx * dt;
+    const ny = e.y + e.vy * dt;
+
+    { // x
+      const tx = nx | 0;
+      const ty = e.y | 0;
+      if (isWalkable(tx, ty)) e.x = nx;
+      else e.vx = 0;
+    }
+    { // y
+      const tx = e.x | 0;
+      const ty = ny | 0;
+      if (isWalkable(tx, ty)) e.y = ny;
+      else e.vy = 0;
+    }
+  }
+
+  function pickWanderTarget(e) {
+    for (let i = 0; i < 40; i++) {
+      const tx = (e.x + (Math.random()*14 - 7)) | 0;
+      const ty = (e.y + (Math.random()*14 - 7)) | 0;
+      if (isWalkable(tx,ty)) return { x: tx + 0.5, y: ty + 0.5 };
+    }
+    return null;
+  }
+
+  function botMaintainTarget(e) {
+    const ex = e.x | 0, ey = e.y | 0;
+    let best = null;
+    for (let r = 2; r <= 10; r++) {
+      for (let i = 0; i < 60; i++) {
+        const tx = ex + ((Math.random()* (r+1))|0) - (r>>1);
+        const ty = ey + ((Math.random()* (r+1))|0) - (r>>1);
+        if (!isWalkable(tx,ty)) continue;
+        const c = corruption[idx(tx,ty)];
+        if (c > 40) continue;
+
+        let near = 0;
+        for (const [dx,dy] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+          const nx = tx+dx, ny = ty+dy;
+          if (inBounds(nx,ny)) near = Math.max(near, corruption[idx(nx,ny)]);
+        }
+        if (near > 90) { best = { x: tx+0.5, y: ty+0.5 }; break; }
+      }
+      if (best) break;
+    }
+    return best;
+  }
+
+  // ---------- Corruption ----------
+  function updateCorruption() {
+    const samples = Math.floor(80 + sim.corruptionIntensity * 2);
+    for (let i = 0; i < samples; i++) {
+      const x = 1 + (Math.random() * (W-2) | 0);
+      const y = 1 + (Math.random() * (H-2) | 0);
+      const k = idx(x,y);
+      if (tiles[k] === 1) continue;
+      const c = corruption[k];
+      if (c < 70) continue;
+
+      const dirs = [[1,0],[-1,0],[0,1],[0,-1]];
+      const [dx,dy] = dirs[(Math.random()*4)|0];
+      const nx = x + dx, ny = y + dy;
+      const nk = idx(nx,ny);
+      if (tiles[nk] === 1) continue;
+
+      const n = corruption[nk];
+      if (n + 3 < c) corruption[nk] = Math.min(255, n + 2);
+      corruption[k] = Math.max(0, c - 1);
+    }
+  }
+
+  // ---------- Fog ----------
+  function revealFromHuman(e) {
+    const r = 7;
+    const ex = e.x, ey = e.y;
+    const fx = Math.cos(e.facing), fy = Math.sin(e.facing);
+
+    for (let yy = -r; yy <= r; yy++) for (let xx = -r; xx <= r; xx++) {
+      const tx = (ex + xx) | 0;
+      const ty = (ey + yy) | 0;
+      if (!inBounds(tx,ty)) continue;
+      const dd = xx*xx + yy*yy;
+      if (dd > r*r) continue;
+
+      const vx = (tx+0.5) - ex;
+      const vy = (ty+0.5) - ey;
+      const d = Math.hypot(vx,vy) || 1;
+      const dot = (vx/d)*fx + (vy/d)*fy;
+      if (dot > -0.15) exploredHuman[idx(tx,ty)] = 1;
+    }
+  }
+
+  // ---------- Resources ----------
+  function countType(type) {
+    let n = 0;
+    for (const e of ents) if (e.type === type) n++;
+    return n;
+  }
+
+  function randomFloorTile(preferUnexplored=false) {
+    for (let i = 0; i < 800; i++) {
+      const x = 1 + (Math.random() * (W-2) | 0);
+      const y = 1 + (Math.random() * (H-2) | 0);
+      const k = idx(x,y);
+      if (tiles[k] !== 0) continue;
+      if (preferUnexplored && exploredHuman[k] === 1) continue;
+      return { x, y };
+    }
+    return null;
+  }
+
+  function spawnResource() {
+    if (resources.length >= sim.maxResources) return;
+    const spot = randomFloorTile(true) || randomFloorTile(false);
+    if (!spot) return;
+    resources.push({ x: spot.x + 0.5, y: spot.y + 0.5, type: "scrap" });
+  }
+
+  function clearResources() { resources.length = 0; }
+
+  // ---------- Input ----------
+  let selected = null;
+
+  canvas.addEventListener("contextmenu", e => e.preventDefault());
+  canvas.addEventListener("mousedown", (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const mx = (e.clientX - rect.left);
+    const my = (e.clientY - rect.top);
+    const wx = mx / TILE + cam.x;
+    const wy = my / TILE + cam.y;
+
+    if (e.button === 0) {
+      let best = null, bd = 999;
+      for (const ent of ents) {
+        const d = Math.hypot(ent.x - wx, ent.y - wy);
+        if (d < 1.0 && d < bd) { bd = d; best = ent; }
+      }
+      if (selected) selected.selected = false;
+      selected = best;
+      if (selected) selected.selected = true;
+    } else if (e.button === 2) {
+      if (selected) selected.target = { x: (wx|0) + 0.5, y: (wy|0) + 0.5 };
+    }
+  });
+
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "1") {
+      if (countType("human") < sim.maxHumans) spawn("human", 12, 14);
+    }
+    if (e.key === "2") {
+      if (countType("bot") < sim.maxBots) spawn("bot", 7, 7);
+    }
+    if (e.key.toLowerCase() === "f") showFog = !showFog;
+    if (e.key.toLowerCase() === "g") showGrid = !showGrid;
+  });
+
+  // ---------- Menu wiring ----------
+  const menuBtn = document.getElementById("menuBtn");
+  const panel = document.getElementById("menuPanel");
+  menuBtn.addEventListener("click", () => {
+    panel.style.display = (panel.style.display === "none") ? "block" : "none";
+  });
+
+  function bindSlider(id, key) {
+    const el = document.getElementById(id);
+    const out = document.getElementById(id + "Val");
+    function apply() {
+      sim[key] = Number(el.value);
+      out.textContent = String(sim[key]);
+    }
+    el.addEventListener("input", apply);
+    apply();
+  }
+
+  bindSlider("maxHumans", "maxHumans");
+  bindSlider("maxBots", "maxBots");
+  bindSlider("humanSpawnPerMin", "humanSpawnPerMin");
+  bindSlider("botSpawnPerMin", "botSpawnPerMin");
+  bindSlider("corruptionIntensity", "corruptionIntensity");
+  bindSlider("resourceSpawnPerMin", "resourceSpawnPerMin");
+  bindSlider("maxResources", "maxResources");
+
+  document.getElementById("resetBtn").addEventListener("click", () => {
+    genMap();
+    humanSpawnAcc = botSpawnAcc = resourceSpawnAcc = 0;
+  });
+
+  document.getElementById("clearResourcesBtn").addEventListener("click", () => {
+    clearResources();
+  });
+
+  // ---------- Update loop ----------
+  let acc = 0;
+  let last = performance.now();
+
+  function tick() {
+    // ---- Spawners ----
+    const humans = countType("human");
+    const bots = countType("bot");
+
+    const humanInterval = sim.humanSpawnPerMin > 0 ? (60 / sim.humanSpawnPerMin) : Infinity;
+    const botInterval   = sim.botSpawnPerMin   > 0 ? (60 / sim.botSpawnPerMin)   : Infinity;
+    const resInterval   = sim.resourceSpawnPerMin > 0 ? (60 / sim.resourceSpawnPerMin) : Infinity;
+
+    humanSpawnAcc += DT;
+    botSpawnAcc += DT;
+    resourceSpawnAcc += DT;
+
+    if (humanSpawnAcc >= humanInterval) {
+      humanSpawnAcc = 0;
+      if (humans < sim.maxHumans) spawn("human", 12, 14);
+    }
+    if (botSpawnAcc >= botInterval) {
+      botSpawnAcc = 0;
+      if (bots < sim.maxBots) spawn("bot", 7, 7);
+    }
+    if (resourceSpawnAcc >= resInterval) {
+      resourceSpawnAcc = 0;
+      spawnResource();
+    }
+
+    // AI
+    for (const e of ents) {
+      if (e.type === "human") {
+        revealFromHuman(e);
+
+        if (e.selected && e.target) {
+          steerTo(e, e.target.x, e.target.y);
+          if (Math.hypot(e.target.x - e.x, e.target.y - e.y) < 0.2) e.target = null;
+        } else {
+          if (!e.target || Math.random() < 0.02) e.target = pickWanderTarget(e);
+          if (e.target) steerTo(e, e.target.x, e.target.y);
+        }
+      } else if (e.type === "bot") {
+        if (!e.target || Math.random() < 0.05) e.target = botMaintainTarget(e) || pickWanderTarget(e);
+        if (e.target) steerTo(e, e.target.x, e.target.y);
+
+        const tx = e.x | 0, ty = e.y | 0;
+        const k = idx(tx,ty);
+        if (tiles[k] === 0) corruption[k] = Math.min(255, corruption[k] + 4);
+      }
+
+      tryMove(e, DT);
+    }
+
+    updateCorruption();
+
+    // Camera follow
+    if (selected) {
+      cam.x = selected.x - (cw / devicePixelRatio) / TILE * 0.5;
+      cam.y = selected.y - (ch / devicePixelRatio) / TILE * 0.5;
+    }
+    cam.x = Math.max(0, Math.min(W - (cw / devicePixelRatio)/TILE, cam.x));
+    cam.y = Math.max(0, Math.min(H - (ch / devicePixelRatio)/TILE, cam.y));
+  }
+
+  function render() {
+    ctx.fillStyle = "#0b0b0b";
+    ctx.fillRect(0,0, cw/devicePixelRatio, ch/devicePixelRatio);
+
+    const viewW = Math.ceil((cw/devicePixelRatio) / TILE);
+    const viewH = Math.ceil((ch/devicePixelRatio) / TILE);
+    const ox = cam.x | 0;
+    const oy = cam.y | 0;
+
+    // tiles
+    for (let y = 0; y <= viewH; y++) for (let x = 0; x <= viewW; x++) {
+      const tx = ox + x;
+      const ty = oy + y;
+      if (!inBounds(tx,ty)) continue;
+
+      const k = idx(tx,ty);
+      const px = (tx - cam.x) * TILE;
+      const py = (ty - cam.y) * TILE;
+
+      if (tiles[k] === 1) ctx.fillStyle = "#1a1a1a";
+      else ctx.fillStyle = "#111";
+      ctx.fillRect(px, py, TILE, TILE);
+
+      const c = corruption[k];
+      if (c > 0 && tiles[k] === 0) {
+        const a = Math.min(0.7, c / 255);
+        ctx.fillStyle = `rgba(80, 180, 255, ${a})`;
+        ctx.fillRect(px, py, TILE, TILE);
+      }
+
+      if (showFog && exploredHuman[k] === 0) {
+        ctx.fillStyle = "rgba(0,0,0,0.88)";
+        ctx.fillRect(px, py, TILE, TILE);
+      }
+
+      if (showGrid) {
+        ctx.strokeStyle = "rgba(255,255,255,0.06)";
+        ctx.strokeRect(px, py, TILE, TILE);
+      }
+    }
+
+    // resources
+    for (const r of resources) {
+      const k = idx(r.x|0, r.y|0);
+      if (showFog && exploredHuman[k] === 0) continue;
+      const px = (r.x - cam.x) * TILE;
+      const py = (r.y - cam.y) * TILE;
+      ctx.fillStyle = "rgba(255, 210, 80, 0.95)";
+      ctx.beginPath();
+      ctx.arc(px, py, 2.6, 0, Math.PI*2);
+      ctx.fill();
+    }
+
+    // entities
+    for (const e of ents) {
+      if (showFog && e.type === "bot") {
+        const k = idx(e.x|0, e.y|0);
+        if (exploredHuman[k] === 0) continue;
+      }
+
+      const k = idx(e.x|0, e.y|0);
+      if (showFog && exploredHuman[k] === 0 && e.type === "human") {
+        // humans are still hidden if not explored (rare, but keeps consistency)
+        continue;
+      }
+
+      // draw sprite scaled down. size ~ 22px reads well on 16px tiles
+      const drew = drawSprite(e.spriteUrl, e.x, e.y, 22);
+
+      if (!drew) {
+        // fallback if sprite missing
+        const px = (e.x - cam.x) * TILE;
+        const py = (e.y - cam.y) * TILE;
+        ctx.fillStyle = (e.type === "human") ? "#e6e6e6" : "#8fffd0";
+        ctx.beginPath();
+        ctx.arc(px, py, 4.2, 0, Math.PI*2);
+        ctx.fill();
+      }
+
+      if (e.selected) {
+        const px = (e.x - cam.x) * TILE;
+        const py = (e.y - cam.y) * TILE;
+        ctx.strokeStyle = "rgba(255,255,255,0.85)";
+        ctx.beginPath();
+        ctx.arc(px, py, 8.2, 0, Math.PI*2);
+        ctx.stroke();
+      }
+    }
+
+    const status = document.getElementById("status");
+    status.textContent =
+      `ents:${ents.length} humans:${countType("human")} bots:${countType("bot")} resources:${resources.length} ` +
+      `fog:${showFog ? "on":"off"} grid:${showGrid ? "on":"off"}` +
+      (selected ? ` selected:${selected.type}#${selected.id}` : "");
+  }
+
+  function frame(now) {
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    acc += dt;
+    while (acc >= DT) { tick(); acc -= DT; }
+    render();
+    requestAnimationFrame(frame);
+  }
+
+  // ---------- Init ----------
+  genMap();
+
+  // Start with a couple units
+  spawn("human", 12, 14);
+  spawn("human", 13, 14);
+  spawn("bot", 7, 7);
+
+  // Load sprites then start loop
+  loadSprites().then(() => requestAnimationFrame(frame));
+})();
+</script>
+</body>
+</html>
